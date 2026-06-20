@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>淘宝视频下载器</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="login-panel" id="loginPanel" hidden>
+        <div>
+          <h1>团队视频库登录</h1>
+          <p>请输入访问密码后继续使用。</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label>
+            <span>访问密码</span>
+            <input id="passwordInput" type="password" autocomplete="current-password" />
+          </label>
+          <button type="submit" id="loginBtn">登录</button>
+        </form>
+        <div class="result" id="loginResult" hidden></div>
+      </section>
+
+      <section class="panel">
+        <div class="topline">
+          <div>
+            <h1>淘宝视频下载器</h1>
+            <p>粘贴真实 MP4 视频链接，按产品名称保存并进入团队视频库。</p>
+          </div>
+          <button type="button" class="ghost small" id="logoutBtn" hidden>退出</button>
+        </div>
+
+        <form id="downloadForm" class="form">
+          <label>
+            <span>淘宝视频链接</span>
+            <textarea
+              id="videoUrl"
+              rows="5"
+              spellcheck="false"
+              placeholder="https://video-sh.cloudvideocdn.taobao.com/...mp4?..."></textarea>
+          </label>
+
+          <div class="grid">
+            <label>
+              <span>产品名称</span>
+              <input id="productName" placeholder="例如：便携折叠收纳箱" />
+            </label>
+            <label>
+              <span id="saveDirLabel">保存文件夹</span>
+              <input id="saveDir" spellcheck="false" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="downloadBtn">下载视频</button>
+            <button type="button" id="pasteBtn" class="secondary">粘贴链接</button>
+            <button type="button" id="clearBtn" class="ghost">清空</button>
+          </div>
+        </form>
+
+        <div class="result" id="result" hidden></div>
+      </section>
+
+      <section class="library-panel">
+        <div class="section-head">
+          <div>
+            <h2>已下载视频</h2>
+            <p id="librarySummary">正在读取视频库...</p>
+          </div>
+          <button type="button" id="refreshLibrary" class="secondary small">刷新</button>
+        </div>
+        <div id="videoGrid" class="video-grid"></div>
+      </section>
+
+      <section class="history-panel">
+        <div class="section-head">
+          <h2>最近操作</h2>
+          <button type="button" id="clearHistory" class="ghost small">清除</button>
+        </div>
+        <ul id="historyList" class="history"></ul>
+      </section>
+    </main>
+
+    <dialog id="previewDialog" class="preview-dialog">
+      <div class="dialog-head">
+        <strong id="previewTitle"></strong>
+        <button type="button" id="closePreview" class="ghost small">关闭</button>
+      </div>
+      <video id="previewVideo" controls playsinline></video>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
