@@ -1,0 +1,12 @@
+{
+  "name": "taobao-video-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Team web tool for downloading Taobao product videos from direct MP4 links.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
