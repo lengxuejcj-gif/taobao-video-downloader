@@ -9,15 +9,9 @@
   <body>
     <main class="shell">
       <section class="login-panel" id="loginPanel" hidden>
-        <div>
-          <h1>团队视频库登录</h1>
-          <p>请输入访问密码后继续使用。</p>
-        </div>
+        <div><h1>团队视频库登录</h1><p>请输入访问密码后继续使用。</p></div>
         <form id="loginForm" class="login-form">
-          <label>
-            <span>访问密码</span>
-            <input id="passwordInput" type="password" autocomplete="current-password" />
-          </label>
+          <label><span>访问密码</span><input id="passwordInput" type="password" autocomplete="current-password" /></label>
           <button type="submit" id="loginBtn">登录</button>
         </form>
         <div class="result" id="loginResult" hidden></div>
@@ -25,72 +19,74 @@
 
       <section class="panel">
         <div class="topline">
-          <div>
-            <h1>淘宝视频下载器</h1>
-            <p>粘贴真实 MP4 视频链接，按产品名称保存并进入团队视频库。</p>
-          </div>
+          <div><h1>淘宝视频下载器</h1><p>粘贴真实 MP4 视频链接，按产品名称保存并进入团队视频库。</p></div>
           <button type="button" class="ghost small" id="logoutBtn" hidden>退出</button>
         </div>
-
         <form id="downloadForm" class="form">
           <label>
             <span>淘宝视频链接</span>
-            <textarea
-              id="videoUrl"
-              rows="5"
-              spellcheck="false"
-              placeholder="https://video-sh.cloudvideocdn.taobao.com/...mp4?..."></textarea>
+            <textarea id="videoUrl" rows="5" spellcheck="false" placeholder="https://video-sh.cloudvideocdn.taobao.com/...mp4?..."></textarea>
           </label>
-
           <div class="grid">
-            <label>
-              <span>产品名称</span>
-              <input id="productName" placeholder="例如：便携折叠收纳箱" />
-            </label>
-            <label>
-              <span id="saveDirLabel">保存文件夹</span>
-              <input id="saveDir" spellcheck="false" />
-            </label>
+            <label><span>产品名称</span><input id="productName" placeholder="例如：便携折叠收纳箱" /></label>
+            <label><span>分组</span><select id="groupSelect"></select></label>
+            <label><span id="saveDirLabel">保存文件夹</span><input id="saveDir" spellcheck="false" /></label>
+            <label><span>产品价格</span><input id="productPrice" placeholder="例如：169" /></label>
+            <label><span>淘宝购买链接</span><input id="productLink" placeholder="https://item.taobao.com/item.htm?id=..." /></label>
+            <label><span>店铺名称</span><input id="shopName" placeholder="例如：某某旗舰店" /></label>
           </div>
-
           <div class="actions">
             <button type="submit" id="downloadBtn">下载视频</button>
             <button type="button" id="pasteBtn" class="secondary">粘贴链接</button>
             <button type="button" id="clearBtn" class="ghost">清空</button>
           </div>
         </form>
-
         <div class="result" id="result" hidden></div>
       </section>
 
       <section class="library-panel">
         <div class="section-head">
-          <div>
-            <h2>已下载视频</h2>
-            <p id="librarySummary">正在读取视频库...</p>
+          <div><h2>已下载视频</h2><p id="librarySummary">正在读取视频库...</p></div>
+          <div class="head-actions">
+            <button type="button" id="deleteSelected" class="danger small">批量删除</button>
+            <button type="button" id="refreshLibrary" class="secondary small">刷新</button>
           </div>
-          <button type="button" id="refreshLibrary" class="secondary small">刷新</button>
+        </div>
+        <div class="library-tools">
+          <input id="searchInput" placeholder="按标题搜索" />
+          <select id="groupFilter"></select>
         </div>
         <div id="videoGrid" class="video-grid"></div>
       </section>
 
       <section class="history-panel">
-        <div class="section-head">
-          <h2>最近操作</h2>
-          <button type="button" id="clearHistory" class="ghost small">清除</button>
-        </div>
+        <div class="section-head"><h2>分组管理</h2><button type="button" id="clearHistory" class="ghost small">清除</button></div>
+        <form id="groupForm" class="group-form"><input id="groupNameInput" placeholder="新分组名称" /><button type="submit" class="small">新增</button></form>
+        <ul id="groupList" class="group-list"></ul>
+        <h2 class="side-title">最近操作</h2>
         <ul id="historyList" class="history"></ul>
       </section>
     </main>
 
     <dialog id="previewDialog" class="preview-dialog">
-      <div class="dialog-head">
-        <strong id="previewTitle"></strong>
-        <button type="button" id="closePreview" class="ghost small">关闭</button>
-      </div>
+      <div class="dialog-head"><strong id="previewTitle"></strong><button type="button" id="closePreview" class="ghost small">关闭</button></div>
       <video id="previewVideo" controls playsinline></video>
     </dialog>
 
+    <dialog id="editDialog" class="preview-dialog">
+      <form id="editForm" class="edit-form">
+        <div class="dialog-head"><strong>编辑视频信息</strong><button type="button" id="closeEdit" class="ghost small">关闭</button></div>
+        <div class="edit-body">
+          <input id="editRelativePath" type="hidden" />
+          <label><span>标题</span><input id="editTitle" /></label>
+          <label><span>分组</span><select id="editGroup"></select></label>
+          <label><span>产品价格</span><input id="editPrice" /></label>
+          <label><span>淘宝购买链接</span><input id="editLink" /></label>
+          <label><span>店铺名称</span><input id="editShop" /></label>
+          <button type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
     <script src="/app.js"></script>
   </body>
 </html>
