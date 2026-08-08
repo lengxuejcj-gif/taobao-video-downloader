@@ -13,6 +13,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ALLOW_CUSTOM_SAVE_DIR = process.env.ALLOW_CUSTOM_SAVE_DIR === 'true';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 const AUTH_COOKIE = 'taobao_video_auth=ok';
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 aweme/30.0.0';
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -50,11 +51,8 @@ function normalizeMetadata(raw = {}) {
   };
 }
 function readMetadata() {
-  try {
-    return normalizeMetadata(JSON.parse(fs.readFileSync(METADATA_FILE, 'utf8')));
-  } catch {
-    return normalizeMetadata();
-  }
+  try { return normalizeMetadata(JSON.parse(fs.readFileSync(METADATA_FILE, 'utf8'))); }
+  catch { return normalizeMetadata(); }
 }
 function writeMetadata(metadata) {
   fs.mkdirSync(DEFAULT_SAVE_DIR, {recursive: true});
@@ -65,10 +63,24 @@ function ensureGroup(metadata, groupId) {
 }
 function resolveSaveDir(dir) {
   if (!ALLOW_CUSTOM_SAVE_DIR) {
-    const subdir = sanitizeName(dir || '');
+    if (!cleanText(dir)) return DEFAULT_SAVE_DIR;
+    const subdir = sanitizeName(dir);
     return subdir ? path.join(DEFAULT_SAVE_DIR, subdir) : DEFAULT_SAVE_DIR;
   }
   return path.resolve(dir || DEFAULT_SAVE_DIR);
+}
+function extractFirstHttpUrl(value) {
+  const match = String(value || '').match(/https?:\/\/[^\s"'<>，。！？、]+/i);
+  if (!match) return '';
+  return match[0].replace(/[)\]}.,;!?。！？、，]+$/g, '');
+}
+function getPlatform(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.includes('douyin.com') || host.includes('iesdouyin.com') || host.includes('amemv.com')) return 'douyin';
+    if (host.includes('taobao.com') || host.includes('alicdn.com') || host.includes('cloudvideocdn')) return 'taobao';
+  } catch {}
+  return 'direct';
 }
 function uniquePath(dir, baseName, ext) {
   let filePath = path.join(dir, `${baseName}${ext}`);
@@ -123,6 +135,8 @@ function listVideoFiles(dir = DEFAULT_SAVE_DIR, bucket = [], metadata = readMeta
       productPrice: itemMeta.productPrice || '',
       productLink: itemMeta.productLink || '',
       shopName: itemMeta.shopName || '',
+      platform: itemMeta.platform || '',
+      sourceUrl: itemMeta.sourceUrl || '',
       groupId,
       groupName: group ? group.name : '未分组',
     });
@@ -143,16 +157,13 @@ function parseJsonBody(req) {
       chunks.push(chunk);
     });
     req.on('end', () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
-      } catch {
-        reject(new Error('JSON 格式不正确'));
-      }
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+      catch { reject(new Error('JSON 格式不正确')); }
     });
     req.on('error', reject);
   });
 }
-function requestUrl(url, redirectCount = 0) {
+function requestUrl(url, redirectCount = 0, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol)) {
@@ -160,13 +171,12 @@ function requestUrl(url, redirectCount = 0) {
       return;
     }
     const client = parsed.protocol === 'https:' ? https : http;
-    const req = client.get(parsed, {
-      headers: {
-        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/125 Safari/537.36',
-        referer: 'https://item.taobao.com/',
-        accept: 'video/mp4,video/*,*/*;q=0.8',
-      },
-    }, (response) => {
+    const requestHeaders = {
+      'user-agent': extraHeaders['user-agent'] || DEFAULT_USER_AGENT,
+      referer: extraHeaders.referer || (getPlatform(url) === 'douyin' ? 'https://www.douyin.com/' : 'https://item.taobao.com/'),
+      accept: extraHeaders.accept || 'video/mp4,video/*,*/*;q=0.8',
+    };
+    const req = client.get(parsed, {headers: requestHeaders}, (response) => {
       const location = response.headers.location;
       if ([301, 302, 303, 307, 308].includes(response.statusCode) && location) {
         response.resume();
@@ -174,25 +184,117 @@ function requestUrl(url, redirectCount = 0) {
           reject(new Error('重定向次数过多'));
           return;
         }
-        requestUrl(new URL(location, parsed).toString(), redirectCount + 1).then(resolve, reject);
+        requestUrl(new URL(location, parsed).toString(), redirectCount + 1, extraHeaders).then(resolve, reject);
         return;
       }
+      response.finalUrl = parsed.toString();
       resolve(response);
     });
     req.setTimeout(45000, () => req.destroy(new Error('连接超时')));
     req.on('error', reject);
   });
 }
+async function fetchText(url, maxBytes = 5 * 1024 * 1024) {
+  const response = await requestUrl(url, 0, {accept: 'text/html,application/xhtml+xml,application/json,*/*;q=0.8'});
+  if (!response.statusCode || response.statusCode >= 400) {
+    response.resume();
+    throw new Error(`页面读取失败，HTTP ${response.statusCode}`);
+  }
+  const chunks = [];
+  let size = 0;
+  await new Promise((resolve, reject) => {
+    response.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error('页面内容太大，无法解析'));
+        response.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.on('end', resolve);
+    response.on('error', reject);
+  });
+  return {text: Buffer.concat(chunks).toString('utf8'), finalUrl: response.finalUrl || url};
+}
+function decodeCandidateUrl(value) {
+  let decoded = String(value || '').replace(/\\u002F/g, '/').replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch { break; }
+  }
+  return decoded;
+}
+function extractTitleFromShare(input, html) {
+  const shareText = cleanText(String(input || '').split(/https?:\/\//i)[0], 160);
+  if (shareText) return shareText.replace(/^复制此链接.*$/g, '').trim();
+  const titleMatch = String(html || '').match(/<title[^>]*>([^<]+)<\/title>/i);
+  return titleMatch ? cleanText(titleMatch[1].replace(/ - 抖音$/, ''), 160) : '';
+}
+function scoreVideoUrl(url) {
+  const value = url.toLowerCase();
+  let score = 0;
+  if (value.includes('origin')) score += 90;
+  if (value.includes('source')) score += 80;
+  if (value.includes('1080')) score += 50;
+  if (value.includes('720')) score += 30;
+  if (value.includes('play_addr')) score += 20;
+  if (value.includes('/play/')) score += 15;
+  if (value.includes('playwm')) score -= 20;
+  if (value.includes('watermark')) score -= 30;
+  if (value.includes('.mp4')) score += 10;
+  return score;
+}
+function extractVideoCandidates(html) {
+  const source = String(html || '');
+  const candidates = new Set();
+  const patterns = [/https?:\\u002F\\u002F[^"'\s<>]+/g, /https?:\\?\/\\?\/[^"'\\\s<>]+/g, /"playAddr"\s*:\s*"([^"]+)"/g, /"play_addr"[\s\S]{0,1200}?"url_list"\s*:\s*\[([\s\S]*?)\]/g];
+  for (const pattern of patterns) {
+    let match = null;
+    while ((match = pattern.exec(source))) {
+      const raw = match[1] || match[0];
+      const nested = raw.match(/https?:\\u002F\\u002F[^"',\]\s<>]+|https?:\\?\/\\?\/[^"',\]\s<>]+/g) || [raw];
+      for (const item of nested) {
+        const decoded = decodeCandidateUrl(item);
+        if (/^https?:\/\//i.test(decoded) && (/\.mp4/i.test(decoded) || /\/play/i.test(decoded) || /playwm/i.test(decoded) || /video\/tos/i.test(decoded)) && !decoded.includes('mime_type=image')) {
+          candidates.add(decoded.replace(/\\u0026/g, '&'));
+          if (decoded.includes('playwm')) candidates.add(decoded.replace('playwm', 'play'));
+        }
+      }
+    }
+  }
+  return Array.from(candidates).sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+}
+async function resolveDouyinVideo(input) {
+  const shareUrl = extractFirstHttpUrl(input);
+  if (!shareUrl) throw new Error('请粘贴抖音分享文案或视频链接');
+  const {text, finalUrl} = await fetchText(shareUrl);
+  const candidates = extractVideoCandidates(text);
+  if (!candidates.length) throw new Error('未能解析抖音原视频地址。请确认链接可公开访问，或重新复制分享链接后再试。');
+  return {videoUrl: candidates[0], sourceUrl: finalUrl, platform: 'douyin', title: extractTitleFromShare(input, text)};
+}
+async function resolveVideoInput(input) {
+  const rawUrl = extractFirstHttpUrl(input);
+  if (!rawUrl) throw new Error('请粘贴视频链接或分享文案');
+  const platform = getPlatform(rawUrl);
+  if (platform === 'douyin') return resolveDouyinVideo(input);
+  return {videoUrl: rawUrl, sourceUrl: rawUrl, platform, title: ''};
+}
 async function downloadVideo({videoUrl, productName, saveDir, groupId, productPrice, productLink, shopName}) {
   if (!videoUrl || typeof videoUrl !== 'string') throw new Error('请粘贴视频链接');
-  const parsed = new URL(videoUrl);
+  const resolvedInput = await resolveVideoInput(videoUrl);
+  const parsed = new URL(resolvedInput.videoUrl);
   if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('视频链接必须以 http 或 https 开头');
-  const dir = resolveSaveDir(saveDir || DEFAULT_SAVE_DIR);
+  const dir = resolveSaveDir(saveDir);
   fs.mkdirSync(dir, {recursive: true});
   const extFromPath = path.extname(parsed.pathname).toLowerCase();
   const ext = ['.mp4', '.mov', '.m4v', '.webm'].includes(extFromPath) ? extFromPath : '.mp4';
-  const outputPath = uniquePath(dir, sanitizeName(productName), ext);
-  const response = await requestUrl(videoUrl);
+  const finalProductName = productName || resolvedInput.title;
+  const outputPath = uniquePath(dir, sanitizeName(finalProductName), ext);
+  const response = await requestUrl(resolvedInput.videoUrl, 0, {referer: resolvedInput.platform === 'douyin' ? 'https://www.douyin.com/' : undefined});
   if (!response.statusCode || response.statusCode >= 400) {
     response.resume();
     throw new Error(`下载失败，HTTP ${response.statusCode}`);
@@ -213,9 +315,11 @@ async function downloadVideo({videoUrl, productName, saveDir, groupId, productPr
     const relativePath = getRelativeVideoPath(outputPath);
     const metadata = readMetadata();
     metadata.videos[relativePath] = {
-      title: cleanText(productName || videoTitleFromPath(outputPath), 160),
+      title: cleanText(finalProductName || videoTitleFromPath(outputPath), 160),
+      platform: resolvedInput.platform,
+      sourceUrl: cleanText(resolvedInput.sourceUrl, 500),
       productPrice: cleanText(productPrice, 80),
-      productLink: cleanText(productLink, 500),
+      productLink: cleanText(productLink || resolvedInput.sourceUrl, 500),
       shopName: cleanText(shopName, 160),
       groupId: ensureGroup(metadata, groupId),
       createdAt: new Date().toISOString(),
@@ -223,14 +327,10 @@ async function downloadVideo({videoUrl, productName, saveDir, groupId, productPr
     };
     writeMetadata(metadata);
     video = listVideoFiles().find((item) => item.relativePath === relativePath) || null;
-  } catch {
-    video = null;
-  }
+  } catch { video = null; }
   return {filePath: outputPath, fileName: path.basename(outputPath), folder: dir, bytes: downloadedBytes, totalBytes, video};
 }
-function listGroups() {
-  return readMetadata().groups;
-}
+function listGroups() { return readMetadata().groups; }
 function createGroup(name) {
   const metadata = readMetadata();
   const cleanName = cleanGroupName(name);
@@ -255,15 +355,7 @@ function renameGroup(id, name) {
 function updateVideoMetadata(relativePath, updates) {
   resolveVideoPath(relativePath);
   const metadata = readMetadata();
-  metadata.videos[relativePath] = {
-    ...(metadata.videos[relativePath] || {}),
-    title: cleanText(updates.title || videoTitleFromPath(relativePath), 160),
-    productPrice: cleanText(updates.productPrice, 80),
-    productLink: cleanText(updates.productLink, 500),
-    shopName: cleanText(updates.shopName, 160),
-    groupId: ensureGroup(metadata, updates.groupId),
-    updatedAt: new Date().toISOString(),
-  };
+  metadata.videos[relativePath] = {...(metadata.videos[relativePath] || {}), title: cleanText(updates.title || videoTitleFromPath(relativePath), 160), productPrice: cleanText(updates.productPrice, 80), productLink: cleanText(updates.productLink, 500), shopName: cleanText(updates.shopName, 160), groupId: ensureGroup(metadata, updates.groupId), updatedAt: new Date().toISOString()};
   writeMetadata(metadata);
   return listVideoFiles().find((video) => video.relativePath === relativePath);
 }
@@ -283,11 +375,7 @@ function deleteVideos(relativePaths) {
 function serveVideo(req, res, attachment = false) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const filePath = resolveVideoPath(reqUrl.searchParams.get('file'));
-  if (!fs.existsSync(filePath)) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
+  if (!fs.existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return; }
   const stat = fs.statSync(filePath);
   const ext = path.extname(filePath).toLowerCase();
   const contentType = ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
@@ -313,17 +401,9 @@ function serveStatic(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = reqUrl.pathname === '/' ? '/index.html' : reqUrl.pathname;
   const filePath = path.normalize(path.join(PUBLIC_DIR, pathname));
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
+  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end('Forbidden'); return; }
   fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
+    if (err) { res.writeHead(404); res.end('Not found'); return; }
     const ext = path.extname(filePath);
     const type = ext === '.css' ? 'text/css' : ext === '.js' ? 'application/javascript' : 'text/html';
     res.writeHead(200, {'content-type': `${type}; charset=utf-8`});
@@ -333,87 +413,26 @@ function serveStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   try {
     const reqUrl = new URL(req.url, `http://${req.headers.host}`);
-    if (req.method === 'GET' && reqUrl.pathname === '/api/config') {
-      sendJson(res, 200, {defaultSaveDir: DEFAULT_SAVE_DIR, allowCustomSaveDir: ALLOW_CUSTOM_SAVE_DIR, authRequired: Boolean(APP_PASSWORD), authed: isAuthed(req)});
-      return;
-    }
+    if (req.method === 'GET' && reqUrl.pathname === '/api/config') { sendJson(res, 200, {defaultSaveDir: DEFAULT_SAVE_DIR, allowCustomSaveDir: ALLOW_CUSTOM_SAVE_DIR, authRequired: Boolean(APP_PASSWORD), authed: isAuthed(req)}); return; }
     if (req.method === 'POST' && reqUrl.pathname === '/api/login') {
       const body = await parseJsonBody(req);
-      if (!APP_PASSWORD || body.password === APP_PASSWORD) {
-        res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'set-cookie': `${AUTH_COOKIE}; Path=/; HttpOnly; SameSite=Lax`});
-        res.end(JSON.stringify({ok: true}));
-        return;
-      }
-      sendJson(res, 401, {error: '密码不正确'});
-      return;
+      if (!APP_PASSWORD || body.password === APP_PASSWORD) { res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'set-cookie': `${AUTH_COOKIE}; Path=/; HttpOnly; SameSite=Lax`}); res.end(JSON.stringify({ok: true})); return; }
+      sendJson(res, 401, {error: '密码不正确'}); return;
     }
-    if (req.method === 'POST' && reqUrl.pathname === '/api/logout') {
-      res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'set-cookie': 'taobao_video_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'});
-      res.end(JSON.stringify({ok: true}));
-      return;
-    }
-    if (req.method === 'GET' && reqUrl.pathname === '/api/videos') {
-      if (!requireAuth(req, res)) return;
-      sendJson(res, 200, {videos: listVideoFiles()});
-      return;
-    }
-    if (req.method === 'GET' && reqUrl.pathname === '/api/groups') {
-      if (!requireAuth(req, res)) return;
-      sendJson(res, 200, {groups: listGroups()});
-      return;
-    }
-    if (req.method === 'POST' && reqUrl.pathname === '/api/groups') {
-      if (!requireAuth(req, res)) return;
-      const body = await parseJsonBody(req);
-      sendJson(res, 200, {group: createGroup(body.name)});
-      return;
-    }
-    if (req.method === 'PUT' && reqUrl.pathname === '/api/groups') {
-      if (!requireAuth(req, res)) return;
-      const body = await parseJsonBody(req);
-      sendJson(res, 200, {group: renameGroup(body.id, body.name)});
-      return;
-    }
-    if (req.method === 'PATCH' && reqUrl.pathname === '/api/videos') {
-      if (!requireAuth(req, res)) return;
-      const body = await parseJsonBody(req);
-      sendJson(res, 200, {video: updateVideoMetadata(body.relativePath, body)});
-      return;
-    }
-    if (req.method === 'POST' && reqUrl.pathname === '/api/videos/delete') {
-      if (!requireAuth(req, res)) return;
-      const body = await parseJsonBody(req);
-      sendJson(res, 200, {deleted: deleteVideos(body.files)});
-      return;
-    }
-    if (req.method === 'GET' && reqUrl.pathname === '/media') {
-      if (!requireAuth(req, res)) return;
-      serveVideo(req, res, false);
-      return;
-    }
-    if (req.method === 'GET' && reqUrl.pathname === '/download') {
-      if (!requireAuth(req, res)) return;
-      serveVideo(req, res, true);
-      return;
-    }
-    if (req.method === 'GET' && reqUrl.pathname === '/health') {
-      sendJson(res, 200, {ok: true});
-      return;
-    }
-    if (req.method === 'POST' && reqUrl.pathname === '/api/download') {
-      if (!requireAuth(req, res)) return;
-      const body = await parseJsonBody(req);
-      sendJson(res, 200, await downloadVideo(body));
-      return;
-    }
-    if (req.method === 'GET') {
-      serveStatic(req, res);
-      return;
-    }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/logout') { res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'set-cookie': 'taobao_video_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'}); res.end(JSON.stringify({ok: true})); return; }
+    if (req.method === 'GET' && reqUrl.pathname === '/api/videos') { if (!requireAuth(req, res)) return; sendJson(res, 200, {videos: listVideoFiles()}); return; }
+    if (req.method === 'GET' && reqUrl.pathname === '/api/groups') { if (!requireAuth(req, res)) return; sendJson(res, 200, {groups: listGroups()}); return; }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/groups') { if (!requireAuth(req, res)) return; const body = await parseJsonBody(req); sendJson(res, 200, {group: createGroup(body.name)}); return; }
+    if (req.method === 'PUT' && reqUrl.pathname === '/api/groups') { if (!requireAuth(req, res)) return; const body = await parseJsonBody(req); sendJson(res, 200, {group: renameGroup(body.id, body.name)}); return; }
+    if (req.method === 'PATCH' && reqUrl.pathname === '/api/videos') { if (!requireAuth(req, res)) return; const body = await parseJsonBody(req); sendJson(res, 200, {video: updateVideoMetadata(body.relativePath, body)}); return; }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/videos/delete') { if (!requireAuth(req, res)) return; const body = await parseJsonBody(req); sendJson(res, 200, {deleted: deleteVideos(body.files)}); return; }
+    if (req.method === 'GET' && reqUrl.pathname === '/media') { if (!requireAuth(req, res)) return; serveVideo(req, res, false); return; }
+    if (req.method === 'GET' && reqUrl.pathname === '/download') { if (!requireAuth(req, res)) return; serveVideo(req, res, true); return; }
+    if (req.method === 'GET' && reqUrl.pathname === '/health') { sendJson(res, 200, {ok: true}); return; }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/download') { if (!requireAuth(req, res)) return; const body = await parseJsonBody(req); sendJson(res, 200, await downloadVideo(body)); return; }
+    if (req.method === 'GET') { serveStatic(req, res); return; }
     sendJson(res, 405, {error: 'Method not allowed'});
-  } catch (error) {
-    sendJson(res, 400, {error: error.message || '下载失败'});
-  }
+  } catch (error) { sendJson(res, 400, {error: error.message || '下载失败'}); }
 });
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
@@ -421,4 +440,4 @@ if (require.main === module) {
     console.log(`Default save folder: ${DEFAULT_SAVE_DIR}`);
   });
 }
-module.exports = {DEFAULT_SAVE_DIR, listVideoFiles, sanitizeName, resolveVideoPath, server};
+module.exports = {DEFAULT_SAVE_DIR, extractFirstHttpUrl, listVideoFiles, resolveVideoInput, sanitizeName, resolveVideoPath, server};
