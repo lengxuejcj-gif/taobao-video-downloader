@@ -2,13 +2,17 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const {DEFAULT_SAVE_DIR, listVideoFiles, resolveVideoPath, sanitizeName} = require('./server');
+const {DEFAULT_SAVE_DIR, extractFirstHttpUrl, listVideoFiles, resolveVideoPath, sanitizeName} = require('./server');
 
 fs.mkdirSync(DEFAULT_SAVE_DIR, {recursive: true});
 
 const sampleName = '测试 产品: A/B?';
 const safeName = sanitizeName(sampleName);
 assert.strictEqual(safeName, '测试 产品 A B');
+assert.strictEqual(
+  extractFirstHttpUrl('解放双手的三筒洗衣机洗鞋机 https://v.douyin.com/y4K9mDn3OSw/ 复制此链接，打开【抖音】'),
+  'https://v.douyin.com/y4K9mDn3OSw/'
+);
 
 const samplePath = path.join(DEFAULT_SAVE_DIR, `${safeName}.mp4`);
 
