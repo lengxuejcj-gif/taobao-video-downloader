@@ -59,12 +59,33 @@ function formatBytes(bytes) {
   }
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-function formatTime(value) { return value ? new Date(value).toLocaleString() : ''; }
-function escapeHtml(value) {
-  return String(value || '').replace(/[&<>"']/g, (char) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+
+function formatTime(value) {
+  return value ? new Date(value).toLocaleString() : '';
 }
-function showResult(type, html) { result.hidden = false; result.className = `result ${type}`; result.innerHTML = html; }
-function showLoginResult(type, html) { loginResult.hidden = false; loginResult.className = `result ${type}`; loginResult.innerHTML = html; }
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
+}
+
+function showResult(type, html) {
+  result.hidden = false;
+  result.className = `result ${type}`;
+  result.innerHTML = html;
+}
+
+function showLoginResult(type, html) {
+  loginResult.hidden = false;
+  loginResult.className = `result ${type}`;
+  loginResult.innerHTML = html;
+}
+
 function updateAuthUi() {
   const locked = authRequired && !authed;
   loginPanel.hidden = !locked;
@@ -74,52 +95,94 @@ function updateAuthUi() {
   logoutButton.hidden = !authRequired || locked;
   if (locked) passwordInput.focus();
 }
-function getHistory() { try { return JSON.parse(localStorage.getItem(historyKey) || '[]'); } catch { return []; } }
-function setHistory(items) { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 20))); renderHistory(); }
+
+function getHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(historyKey) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function setHistory(items) {
+  localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 20)));
+  renderHistory();
+}
+
 function renderHistory() {
   const items = getHistory();
-  historyList.innerHTML = items.length ? items.map((item) => `
-    <li><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.path)}</span><span>${escapeHtml(item.size)} · ${escapeHtml(item.time)}</span></li>
-  `).join('') : '<li><span>暂无记录</span></li>';
+  historyList.innerHTML = '';
+  if (!items.length) {
+    historyList.innerHTML = '<li><span>暂无记录</span></li>';
+    return;
+  }
+  historyList.innerHTML = items.map((item) => `
+    <li>
+      <strong>${escapeHtml(item.name)}</strong>
+      <span>${escapeHtml(item.path)}</span>
+      <span>${escapeHtml(item.size)} · ${escapeHtml(item.time)}</span>
+    </li>
+  `).join('');
 }
+
 function renderGroupOptions() {
-  const options = groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join('');
+  const options = groups.map((group) => `<option value="${group.id}">${escapeHtml(group.name)}</option>`).join('');
   groupSelect.innerHTML = options;
   editGroup.innerHTML = options;
   groupFilter.innerHTML = `<option value="">全部分组</option>${options}`;
 }
+
 function renderGroups() {
   renderGroupOptions();
   groupList.innerHTML = groups.map((group) => `
-    <li><span>${escapeHtml(group.name)}</span>${group.id === 'default' ? '<em>默认</em>' : `<button type="button" class="ghost small rename-group" data-id="${escapeHtml(group.id)}">重命名</button>`}</li>
+    <li>
+      <span>${escapeHtml(group.name)}</span>
+      ${group.id === 'default' ? '<em>默认</em>' : `<button type="button" class="ghost small rename-group" data-id="${group.id}">重命名</button>`}
+    </li>
   `).join('');
+
   groupList.querySelectorAll('.rename-group').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const group = groups.find((item) => item.id === btn.dataset.id);
       const name = prompt('输入新的分组名称', group ? group.name : '');
       if (!name) return;
-      await fetch('/api/groups', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: btn.dataset.id, name})});
+      await fetch('/api/groups', {
+        method: 'PUT',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id: btn.dataset.id, name}),
+      });
       await loadGroups();
       await loadVideos();
     });
   });
 }
+
 function filteredVideos() {
   const keyword = searchInput.value.trim().toLowerCase();
   const groupId = groupFilter.value;
-  return videos.filter((video) => (!keyword || String(video.title || '').toLowerCase().includes(keyword)) && (!groupId || video.groupId === groupId));
+  return videos.filter((video) => {
+    const matchTitle = !keyword || video.title.toLowerCase().includes(keyword);
+    const matchGroup = !groupId || video.groupId === groupId;
+    return matchTitle && matchGroup;
+  });
 }
+
 function openPreview(video) {
-  if (!video) return;
   previewTitle.textContent = video.title;
   previewVideo.src = video.previewUrl;
   if (typeof previewDialog.showModal === 'function') previewDialog.showModal();
   else previewDialog.setAttribute('open', '');
   previewVideo.play().catch(() => {});
 }
-function closePreviewDialog() { previewVideo.pause(); previewVideo.removeAttribute('src'); previewVideo.load(); previewDialog.close(); }
+
+function closePreviewDialog() {
+  previewVideo.pause();
+  previewVideo.removeAttribute('src');
+  previewVideo.load();
+  previewDialog.close();
+}
+
 function openEdit(video) {
-  if (!video) return;
   editRelativePath.value = video.relativePath;
   editTitle.value = video.title;
   editGroup.value = video.groupId || 'default';
@@ -129,37 +192,53 @@ function openEdit(video) {
   if (typeof editDialog.showModal === 'function') editDialog.showModal();
   else editDialog.setAttribute('open', '');
 }
+
 function renderVideos() {
   const visible = filteredVideos();
   librarySummary.textContent = `共 ${videos.length} 个视频，当前显示 ${visible.length} 个`;
   deleteSelected.disabled = !visible.length;
+
   if (!visible.length) {
     videoGrid.innerHTML = '<div class="empty-library">没有匹配的视频</div>';
     return;
   }
+
   videoGrid.innerHTML = visible.map((video) => `
     <article class="video-card">
-      <label class="select-box"><input type="checkbox" class="video-check" value="${escapeHtml(video.relativePath)}" /></label>
-      <div class="thumb-wrap"><video class="thumb" src="${escapeHtml(video.previewUrl)}#t=0.2" preload="metadata" muted playsinline></video></div>
+      <label class="select-box">
+        <input type="checkbox" class="video-check" value="${escapeHtml(video.relativePath)}" />
+      </label>
+      <div class="thumb-wrap">
+        <video class="thumb" src="${video.previewUrl}#t=0.2" preload="metadata" muted playsinline></video>
+      </div>
       <div class="video-meta">
         <strong title="${escapeHtml(video.fileName)}">${escapeHtml(video.title)}</strong>
         <span>${escapeHtml(video.groupName)} · ${formatBytes(video.bytes)} · ${formatTime(video.updatedAt)}</span>
         ${video.shopName ? `<span>店铺：${escapeHtml(video.shopName)}</span>` : ''}
         ${video.productPrice ? `<span>价格：${escapeHtml(video.productPrice)}</span>` : ''}
-        ${video.productLink ? `<a href="${escapeHtml(video.productLink)}" target="_blank" rel="noreferrer">淘宝购买链接</a>` : ''}
+        ${video.platform ? `<span>来源：${escapeHtml(video.platform)}</span>` : ''}
+        ${video.productLink ? `<a href="${escapeHtml(video.productLink)}" target="_blank" rel="noreferrer">购买 / 来源链接</a>` : ''}
       </div>
       <div class="card-actions">
         <button type="button" class="preview-btn" data-file="${escapeHtml(video.relativePath)}">预览</button>
         <button type="button" class="edit-btn secondary" data-file="${escapeHtml(video.relativePath)}">编辑</button>
         <button type="button" class="delete-btn danger" data-file="${escapeHtml(video.relativePath)}">删除</button>
-        <a class="download-link" href="${escapeHtml(video.downloadUrl)}">下载本地</a>
+        <a class="download-link" href="${video.downloadUrl}">下载本地</a>
       </div>
     </article>
   `).join('');
-  videoGrid.querySelectorAll('.preview-btn').forEach((btn) => btn.addEventListener('click', () => openPreview(videos.find((video) => video.relativePath === btn.dataset.file))));
-  videoGrid.querySelectorAll('.edit-btn').forEach((btn) => btn.addEventListener('click', () => openEdit(videos.find((video) => video.relativePath === btn.dataset.file))));
-  videoGrid.querySelectorAll('.delete-btn').forEach((btn) => btn.addEventListener('click', () => deleteFiles([btn.dataset.file])));
+
+  videoGrid.querySelectorAll('.preview-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openPreview(videos.find((video) => video.relativePath === btn.dataset.file)));
+  });
+  videoGrid.querySelectorAll('.edit-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openEdit(videos.find((video) => video.relativePath === btn.dataset.file)));
+  });
+  videoGrid.querySelectorAll('.delete-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteFiles([btn.dataset.file]));
+  });
 }
+
 async function loadGroups() {
   if (authRequired && !authed) return;
   const response = await fetch('/api/groups');
@@ -168,6 +247,7 @@ async function loadGroups() {
   groups = data.groups || [];
   renderGroups();
 }
+
 async function loadVideos() {
   if (authRequired && !authed) return;
   refreshLibrary.disabled = true;
@@ -184,6 +264,7 @@ async function loadVideos() {
     refreshLibrary.disabled = false;
   }
 }
+
 async function loadConfig() {
   const response = await fetch('/api/config');
   const config = await response.json();
@@ -200,13 +281,18 @@ async function loadConfig() {
     saveDir.placeholder = '例如：夏季新品/直播素材';
   }
 }
+
 async function submitLogin(event) {
   event.preventDefault();
   loginResult.hidden = true;
   loginButton.disabled = true;
   loginButton.textContent = '登录中...';
   try {
-    const response = await fetch('/api/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({password: passwordInput.value})});
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({password: passwordInput.value}),
+    });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '登录失败');
     authed = true;
@@ -220,7 +306,13 @@ async function submitLogin(event) {
     loginButton.textContent = '登录';
   }
 }
-async function logout() { await fetch('/api/logout', {method: 'POST'}).catch(() => {}); authed = false; updateAuthUi(); }
+
+async function logout() {
+  await fetch('/api/logout', {method: 'POST'}).catch(() => {});
+  authed = false;
+  updateAuthUi();
+}
+
 async function submitDownload(event) {
   event.preventDefault();
   result.hidden = true;
@@ -233,32 +325,48 @@ async function submitDownload(event) {
     productLink: productLink.value.trim(),
     shopName: shopName.value.trim(),
   };
-  if (!payload.videoUrl) { showResult('bad', '请先粘贴淘宝视频链接。'); return; }
+  if (!payload.videoUrl) {
+    showResult('bad', '请先粘贴视频链接或分享文案。');
+    return;
+  }
   button.disabled = true;
   button.textContent = '下载中...';
   showResult('good', '正在连接视频地址并保存，请稍等。');
   try {
-    const response = await fetch('/api/download', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(payload)});
+    const response = await fetch('/api/download', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '下载失败');
     showResult('good', `已保存：<strong>${escapeHtml(data.fileName)}</strong><br />大小：${formatBytes(data.bytes)}`);
     setHistory([{name: data.fileName, path: data.filePath, size: formatBytes(data.bytes), time: new Date().toLocaleString()}, ...getHistory()]);
     await loadVideos();
   } catch (error) {
-    showResult('bad', error.message || '下载失败。链接可能已过期，请重新复制视频地址。');
+    showResult('bad', error.message || '下载失败。链接可能已过期，请重新复制视频地址或分享文案。');
   } finally {
     button.disabled = false;
     button.textContent = '下载视频';
   }
 }
+
 async function deleteFiles(files) {
   if (!files.length) return;
   if (!confirm(`确认删除 ${files.length} 个视频？此操作不可恢复。`)) return;
-  const response = await fetch('/api/videos/delete', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({files})});
+  const response = await fetch('/api/videos/delete', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({files}),
+  });
   const data = await response.json();
-  if (!response.ok) { alert(data.error || '删除失败'); return; }
+  if (!response.ok) {
+    alert(data.error || '删除失败');
+    return;
+  }
   await loadVideos();
 }
+
 async function initData() {
   await loadConfig();
   if (!authRequired || authed) {
@@ -266,25 +374,64 @@ async function initData() {
     await loadVideos();
   }
 }
-pasteButton.addEventListener('click', async () => { try { videoUrl.value = await navigator.clipboard.readText(); videoUrl.focus(); } catch { showResult('bad', '浏览器没有授权读取剪贴板，请手动粘贴。'); } });
-clearButton.addEventListener('click', () => { videoUrl.value = ''; productName.value = ''; productPrice.value = ''; productLink.value = ''; shopName.value = ''; result.hidden = true; });
+
+pasteButton.addEventListener('click', async () => {
+  try {
+    videoUrl.value = await navigator.clipboard.readText();
+    videoUrl.focus();
+  } catch {
+    showResult('bad', '浏览器没有授权读取剪贴板，请手动粘贴。');
+  }
+});
+
+clearButton.addEventListener('click', () => {
+  videoUrl.value = '';
+  productName.value = '';
+  productPrice.value = '';
+  productLink.value = '';
+  shopName.value = '';
+  result.hidden = true;
+});
+
 groupForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const name = groupNameInput.value.trim();
   if (!name) return;
-  const response = await fetch('/api/groups', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({name})});
-  if (response.ok) { groupNameInput.value = ''; await loadGroups(); }
+  const response = await fetch('/api/groups', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  if (response.ok) {
+    groupNameInput.value = '';
+    await loadGroups();
+  }
 });
+
 editForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const response = await fetch('/api/videos', {
     method: 'PATCH',
     headers: {'content-type': 'application/json'},
-    body: JSON.stringify({relativePath: editRelativePath.value, title: editTitle.value, groupId: editGroup.value, productPrice: editPrice.value, productLink: editLink.value, shopName: editShop.value}),
+    body: JSON.stringify({
+      relativePath: editRelativePath.value,
+      title: editTitle.value,
+      groupId: editGroup.value,
+      productPrice: editPrice.value,
+      productLink: editLink.value,
+      shopName: editShop.value,
+    }),
   });
-  if (response.ok) { editDialog.close(); await loadVideos(); }
+  if (response.ok) {
+    editDialog.close();
+    await loadVideos();
+  }
 });
-deleteSelected.addEventListener('click', () => deleteFiles(Array.from(document.querySelectorAll('.video-check:checked')).map((item) => item.value)));
+
+deleteSelected.addEventListener('click', () => {
+  const checked = Array.from(document.querySelectorAll('.video-check:checked')).map((item) => item.value);
+  deleteFiles(checked);
+});
 searchInput.addEventListener('input', renderVideos);
 groupFilter.addEventListener('change', renderVideos);
 clearHistoryButton.addEventListener('click', () => setHistory([]));
@@ -295,5 +442,8 @@ closeEdit.addEventListener('click', () => editDialog.close());
 loginForm.addEventListener('submit', submitLogin);
 logoutButton.addEventListener('click', logout);
 form.addEventListener('submit', submitDownload);
+
 renderHistory();
-initData().catch(() => showResult('bad', '服务配置读取失败，请确认服务已启动。'));
+initData().catch(() => {
+  showResult('bad', '服务配置读取失败，请确认服务已启动。');
+});
