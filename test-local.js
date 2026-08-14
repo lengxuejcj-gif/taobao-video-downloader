@@ -13,6 +13,7 @@ const {
   listVideoFiles,
   resolveVideoPath,
   sanitizeName,
+  selectYtDlpVideoUrl,
 } = require('./server');
 
 fs.mkdirSync(DEFAULT_SAVE_DIR, {recursive: true});
@@ -27,6 +28,15 @@ assert.strictEqual(
 assert.strictEqual(extractDouyinAwemeId('https://www.iesdouyin.com/share/video/7363189303729507622/'), '7363189303729507622');
 assert.strictEqual(extractDouyinAwemeId('https://www.douyin.com/video/7363189303729507622'), '7363189303729507622');
 assert.strictEqual(isDouyinBlockedPage('<script data-sdk-glue-in="pre-handle"></script>'), true);
+assert.strictEqual(
+  selectYtDlpVideoUrl({
+    formats: [
+      {url: 'https://example.com/480.mp4', ext: 'mp4', height: 480, tbr: 800},
+      {url: 'https://example.com/1080.mp4', ext: 'mp4', height: 1080, tbr: 1800},
+    ],
+  }),
+  'https://example.com/1080.mp4'
+);
 
 const taobaoHtml =
   '<html><head><title>旧标题 - 淘宝网</title></head><body>' +
