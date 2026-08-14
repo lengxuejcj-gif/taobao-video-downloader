@@ -4,9 +4,11 @@ const path = require('path');
 
 const {
   DEFAULT_SAVE_DIR,
+  extractDouyinAwemeId,
   extractFirstHttpUrl,
   extractTaobaoTitle,
   extractVideoCandidates,
+  isDouyinBlockedPage,
   isTaobaoBlockedPage,
   listVideoFiles,
   resolveVideoPath,
@@ -22,6 +24,9 @@ assert.strictEqual(
   extractFirstHttpUrl('解放双手的三筒洗衣机洗鞋机 https://v.douyin.com/y4K9mDn3OSw/ 复制此链接，打开【抖音】'),
   'https://v.douyin.com/y4K9mDn3OSw/'
 );
+assert.strictEqual(extractDouyinAwemeId('https://www.iesdouyin.com/share/video/7363189303729507622/'), '7363189303729507622');
+assert.strictEqual(extractDouyinAwemeId('https://www.douyin.com/video/7363189303729507622'), '7363189303729507622');
+assert.strictEqual(isDouyinBlockedPage('<script data-sdk-glue-in="pre-handle"></script>'), true);
 
 const taobaoHtml =
   '<html><head><title>旧标题 - 淘宝网</title></head><body>' +
