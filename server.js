@@ -1,7 +1,9 @@
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const {execFile} = require('child_process');
 const {URL} = require('url');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -264,7 +266,7 @@ function requestUrl(url, redirectCount = 0, extraHeaders = {}) {
         resolve(response);
       }
     );
-    req.setTimeout(45000, () => req.destroy(new Error('连接超时')));
+    req.setTimeout(extraHeaders.timeoutMs || 45000, () => req.destroy(new Error('连接超时')));
     req.on('error', reject);
   });
 }
@@ -373,6 +375,127 @@ function isDouyinBlockedPage(html) {
   return /data-sdk-glue-in|secsdk|captcha|verify|验证码|风控|login|请登录|_signature|x-bogus/.test(source);
 }
 
+function execFileAsync(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      {
+        timeout: options.timeout || 60000,
+        maxBuffer: options.maxBuffer || 8 * 1024 * 1024,
+        env: process.env,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          error.stdout = stdout;
+          error.stderr = stderr;
+          reject(error);
+          return;
+        }
+        resolve({stdout, stderr});
+      }
+    );
+  });
+}
+
+function findChromiumExecutable() {
+  const candidates = [
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+  ];
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return '';
+}
+
+function scoreYtDlpFormat(format = {}) {
+  let score = 0;
+  const ext = String(format.ext || '').toLowerCase();
+  const protocol = String(format.protocol || '').toLowerCase();
+  if (ext === 'mp4') score += 100000;
+  if (protocol.includes('m3u8') || protocol.includes('dash')) score -= 50000;
+  if (format.vcodec && format.vcodec !== 'none') score += 10000;
+  if (format.acodec && format.acodec !== 'none') score += 1000;
+  score += Number(format.height || 0) * 10;
+  score += Number(format.tbr || 0);
+  score += Number(format.filesize || format.filesize_approx || 0) / 1024 / 1024;
+  return score;
+}
+
+function selectYtDlpVideoUrl(info = {}) {
+  const candidates = [];
+  if (/^https?:\/\//i.test(info.url || '')) {
+    candidates.push({url: info.url, score: scoreYtDlpFormat(info) + 1000000});
+  }
+  for (const format of Array.isArray(info.formats) ? info.formats : []) {
+    if (!/^https?:\/\//i.test(format.url || '')) continue;
+    if (format.vcodec === 'none') continue;
+    candidates.push({url: format.url, score: scoreYtDlpFormat(format)});
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.length ? candidates[0].url : '';
+}
+
+async function resolveDouyinWithBrowserYtDlp(shareUrl, input) {
+  const chromium = findChromiumExecutable();
+  if (!chromium) {
+    throw new Error('当前部署未安装 Chromium，无法使用抖音浏览器兜底解析。请部署最新 Docker 镜像后再试。');
+  }
+
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'douyin-chromium-'));
+  try {
+    await execFileAsync(
+      chromium,
+      [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        `--user-data-dir=${profileDir}`,
+        '--window-size=390,844',
+        '--virtual-time-budget=8000',
+        '--dump-dom',
+        shareUrl,
+      ],
+      {timeout: 20000, maxBuffer: 2 * 1024 * 1024}
+    );
+
+    const {stdout} = await execFileAsync(
+      'yt-dlp',
+      ['-J', '--no-warnings', '--no-playlist', '--cookies-from-browser', `chromium:${profileDir}`, shareUrl],
+      {timeout: 60000, maxBuffer: 16 * 1024 * 1024}
+    );
+    const info = JSON.parse(stdout);
+    const videoUrl = selectYtDlpVideoUrl(info);
+    if (!videoUrl) {
+      throw new Error('yt-dlp 未返回可直接下载的视频地址');
+    }
+    return {
+      videoUrl,
+      sourceUrl: shareUrl,
+      platform: 'douyin',
+      title: cleanText(info.title || extractTitleFromShare(input, ''), 160),
+    };
+  } catch (error) {
+    const details = String(error.stderr || error.message || '');
+    if (error.code === 'ENOENT') {
+      throw new Error('当前部署未安装 yt-dlp，无法使用抖音兜底解析。请部署最新 Docker 镜像后再试。');
+    }
+    if (/fresh cookies/i.test(details)) {
+      throw new Error('抖音仍要求更新鲜的浏览器 Cookie，当前服务器无法读取原视频地址。请重新复制分享链接后再试，或复制真实视频链接。');
+    }
+    throw new Error('抖音浏览器兜底解析失败。请重新复制分享链接后再试，或复制真实视频链接。');
+  } finally {
+    fs.rmSync(profileDir, {recursive: true, force: true});
+  }
+}
+
 function extractTitleFromShare(input, html) {
   const shareText = cleanText(String(input || '').split(/https?:\/\//i)[0], 160);
   if (shareText) return shareText.replace(/^复制此链接.*$/g, '').trim();
@@ -453,6 +576,7 @@ async function resolveDouyinVideo(input) {
           'user-agent': DESKTOP_USER_AGENT,
           referer: 'https://www.douyin.com/',
           accept: 'application/json,text/plain,*/*;q=0.8',
+          timeoutMs: 12000,
         });
         candidates = extractVideoCandidates(detail.text);
         if (candidates.length) break;
@@ -460,10 +584,7 @@ async function resolveDouyinVideo(input) {
     }
   }
   if (!candidates.length) {
-    if (awemeId && isDouyinBlockedPage(text)) {
-      throw new Error('抖音返回了风控页面，服务器无法读取原视频地址。请重新复制分享链接后重试；如果仍失败，需要复制真实视频链接。');
-    }
-    throw new Error('未能解析抖音原视频地址。请确认链接可公开访问，或重新复制分享链接后再试。');
+    return resolveDouyinWithBrowserYtDlp(shareUrl, input);
   }
   return {
     videoUrl: candidates[0],
@@ -828,6 +949,7 @@ module.exports = {
   listVideoFiles,
   resolveVideoInput,
   sanitizeName,
+  selectYtDlpVideoUrl,
   resolveVideoPath,
   server,
 };
