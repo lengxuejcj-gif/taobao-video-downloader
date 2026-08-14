@@ -354,6 +354,25 @@ function isTaobaoBlockedPage(html) {
   return /passport\.taobao|login|验证码|verify|punish|请登录|登录后查看/.test(source);
 }
 
+function extractDouyinAwemeId(value) {
+  const source = String(value || '');
+  const patterns = [
+    /\/(?:share\/)?video\/(\d{10,30})/i,
+    /[?&](?:aweme_id|modal_id|item_id)=(\d{10,30})/i,
+    /"(?:aweme_id|modal_id|group_id)"\s*:\s*"?(\\?\d{10,30})"?/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (match) return match[1].replace(/\\/g, '');
+  }
+  return '';
+}
+
+function isDouyinBlockedPage(html) {
+  const source = String(html || '').toLowerCase();
+  return /data-sdk-glue-in|secsdk|captcha|verify|验证码|风控|login|请登录|_signature|x-bogus/.test(source);
+}
+
 function extractTitleFromShare(input, html) {
   const shareText = cleanText(String(input || '').split(/https?:\/\//i)[0], 160);
   if (shareText) return shareText.replace(/^复制此链接.*$/g, '').trim();
@@ -421,8 +440,29 @@ async function resolveDouyinVideo(input) {
   const shareUrl = extractFirstHttpUrl(input);
   if (!shareUrl) throw new Error('请粘贴抖音分享文案或视频链接');
   const {text, finalUrl} = await fetchText(shareUrl);
-  const candidates = extractVideoCandidates(text);
+  let candidates = extractVideoCandidates(text);
+  const awemeId = extractDouyinAwemeId(finalUrl) || extractDouyinAwemeId(text) || extractDouyinAwemeId(input);
+  if (!candidates.length && awemeId) {
+    const detailUrls = [
+      `https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=${encodeURIComponent(awemeId)}`,
+      `https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=${encodeURIComponent(awemeId)}`,
+    ];
+    for (const detailUrl of detailUrls) {
+      try {
+        const detail = await fetchText(detailUrl, 2 * 1024 * 1024, {
+          'user-agent': DESKTOP_USER_AGENT,
+          referer: 'https://www.douyin.com/',
+          accept: 'application/json,text/plain,*/*;q=0.8',
+        });
+        candidates = extractVideoCandidates(detail.text);
+        if (candidates.length) break;
+      } catch {}
+    }
+  }
   if (!candidates.length) {
+    if (awemeId && isDouyinBlockedPage(text)) {
+      throw new Error('抖音返回了风控页面，服务器无法读取原视频地址。请重新复制分享链接后重试；如果仍失败，需要复制真实视频链接。');
+    }
     throw new Error('未能解析抖音原视频地址。请确认链接可公开访问，或重新复制分享链接后再试。');
   }
   return {
@@ -779,9 +819,11 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_SAVE_DIR,
+  extractDouyinAwemeId,
   extractFirstHttpUrl,
   extractTaobaoTitle,
   extractVideoCandidates,
+  isDouyinBlockedPage,
   isTaobaoBlockedPage,
   listVideoFiles,
   resolveVideoInput,
